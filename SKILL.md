@@ -66,14 +66,14 @@ metadata:
 
 ## ⚠️ 第零步：加载本skill
 
-用户提到彩票分析时，第一步必须 `skill_view(name='lottery-analysis-smart-v3')`。
+用户提到彩票分析时，第一步必须加载本 skill：`lottery-analysis-smart-v5`。
 
 ## ⚠️ 第一步：执行脚本（唯一正确做法）
 
 **⛔ 禁止手动分析！只有执行脚本一条路！**
 
 ```bash
-cd C:\Users\21920\.qclaw\workspace\skills\lottery-analysis-smart-v3\scripts
+cd C:\Users\21920\.workbuddy\skills\lottery-analysis-smart-v5\scripts
 python run_analysis.py --games 3d,35 --count 100
 ```
 

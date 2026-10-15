@@ -1,5 +1,5 @@
-import sys, json, random
-sys.path.insert(0, r"C:\Users\21920\.qclaw\workspace\skills\lottery-analysis-smart-v2\scripts")
+import sys, os, json, random
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lottery_analysis as la
 from dlt_analysis import DLTAnalyzer
 
