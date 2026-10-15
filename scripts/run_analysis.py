@@ -843,6 +843,57 @@ def format_dlt_report_v4(data, rec, analyzer):
     return '\n'.join(lines)
 
 
+def _extract_bsg(item):
+    """从 V4 / ensemble 的候选元素中统一取出 (百, 十, 个)。"""
+    if isinstance(item, dict):
+        nums = item.get('num')
+        if isinstance(nums, (tuple, list)) and len(nums) == 3:
+            return int(nums[0]), int(nums[1]), int(nums[2])
+        return int(item.get('b', 0)), int(item.get('s', 0)), int(item.get('g', 0))
+    return int(item[0]), int(item[1]), int(item[2])
+
+
+def apply_quality_floor(data, candidates, style='balanced'):
+    """
+    V4 / ensemble 路径的质量底线后处理。
+
+    所有 3D/排三清单必须经过 smart_selector.enforce_gold_silver() 出口，
+    否则会出现「0-9 没覆盖全」「某个数字占了 7 注」这类隐性集中。
+    流程：质量底线过滤（跨度3-8、和值6-23）→ 组合去重 → 金银码占位
+          → 0-9 全覆盖 → 单数字出现注数 ≤ 5。
+    """
+    smart = SmartNumberSelector()
+    ctx = smart.compute_context(data)
+
+    items = []
+    for cand in candidates[:10]:
+        b, s, g = _extract_bsg(cand)
+        hz, kd = b + s + g, max(b, s, g) - min(b, s, g)
+        if not (3 <= kd <= 8 and 6 <= hz <= 23):
+            continue  # 不合质量底线的直接不入池，后续由候选池补足
+        sc, details = smart.score_candidate_v3(b, s, g, ctx, style)
+        uniq = len({b, s, g})
+        items.append({
+            'score': sc, 'b': b, 's': s, 'g': g, 'hz': hz, 'kd': kd,
+            'shape': 'baozi' if uniq == 1 else ('zusan' if uniq == 2 else 'zuliu'),
+            'odd': sum(1 for x in (b, s, g) if x % 2 == 1),
+            'big': sum(1 for x in (b, s, g) if x >= 5),
+            'details': details,
+        })
+
+    gold = (items[0]['b'], items[0]['s'], items[0]['g'])
+    # 银码：优先取与金码数字集合交集 ≤ 1 的最高分注。
+    # 否则 Borda 融合的高分注天然雷同（如金码 478 / 银码 078 共享 78），
+    # 清单看似有金银两码，实际覆盖度只有一组数字。
+    gold_set = set(gold)
+    silver_cand = next((it for it in items[1:]
+                        if len(set((it['b'], it['s'], it['g'])) & gold_set) <= 1), None)
+    silver = (silver_cand['b'], silver_cand['s'], silver_cand['g']) if silver_cand else gold
+
+    fixed = smart.enforce_gold_silver(items, ctx, gold, silver, style=style)
+    return {'items': fixed, 'gold': gold, 'silver': silver}
+
+
 def run_single_game(game_code, count=200, version='v3'):
     """
     运行单个彩种的完整分析流程。
@@ -855,21 +906,31 @@ def run_single_game(game_code, count=200, version='v3'):
         print(f"[{name}] 获取到 {len(data)} 期数据", file=sys.stderr)
 
         if version == 'v4' and SmartNumberSelectorV4 is not None:
-            smart = SmartNumberSelectorV4(style='adaptive')
-            rec = smart.recommend_v4(data, n=10)
-            analysis_ctx = smart.compute_context(data)
+            smart4 = SmartNumberSelectorV4(style='adaptive')
+            rec = smart4.recommend_v4(data, n=10)
+            analysis_ctx = smart4.compute_context(data)
+            # 质量底线后处理：V4 输出同样必须走 enforce_gold_silver 出口
+            qf = apply_quality_floor(data, rec.get('top10', [])[:10])
+            fixed = qf['items']
+            if fixed:
+                rec['top10'] = [{'b': it['b'], 's': it['s'], 'g': it['g'],
+                                 'sum': it['hz'], 'span': it['kd']} for it in fixed]
+                rec['gold'] = [qf['gold']]
+                rec['silver'] = [qf['silver']]
             report = format_3d_report_v4(data, name, rec, analysis_ctx)
             return report, data
         elif version == 'ensemble' and EnsembleRecommender3D is not None:
             raw = EnsembleRecommender3D(data, style='adaptive').recommend(n=10)
             bets = raw.get('bets', [])
+            # 质量底线后处理：ensemble 输出必须走 enforce_gold_silver 出口，
+            # 否则 Borda 融合结果会出现 0-9 未覆盖 / 单数字占用过多注数的问题
+            qf = apply_quality_floor(data, bets[:10])
+            fixed = qf['items']
             rec = {
-                'gold': [(b['b'], b['s'], b['g']) for b in bets[:2]],
-                'silver': [(b['b'], b['s'], b['g']) for b in bets[2:4]],
-                'top10': [{'b': b['b'], 's': b['s'], 'g': b['g'],
-                           'sum': b['b'] + b['s'] + b['g'],
-                           'span': max(b['b'], b['s'], b['g']) - min(b['b'], b['s'], b['g'])}
-                          for b in bets[:10]],
+                'gold': [qf['gold']],
+                'silver': [qf['silver']],
+                'top10': [{'b': it['b'], 's': it['s'], 'g': it['g'],
+                           'sum': it['hz'], 'span': it['kd']} for it in fixed],
                 'style_used': raw.get('style', 'balanced'),
                 'backtest_hint': 'V3+V4 Ensemble 集成推荐，来源：' + '+'.join(raw.get('sources', ['v3']))
             }
@@ -893,21 +954,31 @@ def run_single_game(game_code, count=200, version='v3'):
         print(f"[{name}] 获取到 {len(data)} 期数据", file=sys.stderr)
 
         if version == 'v4' and SmartNumberSelectorV4 is not None:
-            smart = SmartNumberSelectorV4(style='adaptive')
-            rec = smart.recommend_v4(data, n=10)
-            analysis_ctx = smart.compute_context(data)
+            smart4 = SmartNumberSelectorV4(style='adaptive')
+            rec = smart4.recommend_v4(data, n=10)
+            analysis_ctx = smart4.compute_context(data)
+            # 质量底线后处理：V4 输出同样必须走 enforce_gold_silver 出口
+            qf = apply_quality_floor(data, rec.get('top10', [])[:10])
+            fixed = qf['items']
+            if fixed:
+                rec['top10'] = [{'b': it['b'], 's': it['s'], 'g': it['g'],
+                                 'sum': it['hz'], 'span': it['kd']} for it in fixed]
+                rec['gold'] = [qf['gold']]
+                rec['silver'] = [qf['silver']]
             report = format_3d_report_v4(data, name, rec, analysis_ctx)
             return report, data
         elif version == 'ensemble' and EnsembleRecommender3D is not None:
             raw = EnsembleRecommender3D(data, style='adaptive').recommend(n=10)
             bets = raw.get('bets', [])
+            # 质量底线后处理：ensemble 输出必须走 enforce_gold_silver 出口，
+            # 否则 Borda 融合结果会出现 0-9 未覆盖 / 单数字占用过多注数的问题
+            qf = apply_quality_floor(data, bets[:10])
+            fixed = qf['items']
             rec = {
-                'gold': [(b['b'], b['s'], b['g']) for b in bets[:2]],
-                'silver': [(b['b'], b['s'], b['g']) for b in bets[2:4]],
-                'top10': [{'b': b['b'], 's': b['s'], 'g': b['g'],
-                           'sum': b['b'] + b['s'] + b['g'],
-                           'span': max(b['b'], b['s'], b['g']) - min(b['b'], b['s'], b['g'])}
-                          for b in bets[:10]],
+                'gold': [qf['gold']],
+                'silver': [qf['silver']],
+                'top10': [{'b': it['b'], 's': it['s'], 'g': it['g'],
+                           'sum': it['hz'], 'span': it['kd']} for it in fixed],
                 'style_used': raw.get('style', 'balanced'),
                 'backtest_hint': 'V3+V4 Ensemble 集成推荐，来源：' + '+'.join(raw.get('sources', ['v3']))
             }
@@ -969,7 +1040,12 @@ def main():
     parser.add_argument('--version', type=str, default='v3',
                         choices=['v3', 'v4', 'ensemble'],
                         help='模型版本：v3(默认) | v4 | ensemble')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='固定随机种子，使 v4/ensemble 结果可复现（ensemble 含 Bootstrap 采样，默认每次不同）')
     args = parser.parse_args()
+
+    if args.seed is not None:
+        random.seed(args.seed)
     
     # 统一彩种代码：支持 3d/3D/35/85，也支持用户说的 pl3/排三/P3 等别名
     aliases = {
