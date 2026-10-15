@@ -299,6 +299,33 @@ python run_analysis.py --games [彩种] --count 100
 - 告诉用户"抱歉，我刚才在复制旧数据，现在重新执行脚本"
 - 执行脚本并输出新结果
 
+## 🛡️ 脚本层质量底线（2026-10-15 补全，勿回退）
+
+`smart_selector.enforce_gold_silver()` 是所有合格清单的唯一出口（`run_analysis.py` 的 3d/35 分支必须调用它）。
+该函数依次执行 5 步，**任何一步被跳过、被 `random.shuffle` 打断，或改用打分后未调用它，输出即为不合格**：
+
+| 步骤 | 约束 | 说明 |
+|:---:|------|------|
+| 1 | 组合级去重 | `tuple(sorted(nums))` 相同的号码视为同一注，只留评分较高者（消除 615/516 这类名额浪费） |
+| 2 | 金码/银码强制占位 | 金码、银码必须出现在清单内 |
+| 3 | 质量底线 | 跨度 3–8、和值 6–23，不在此区间的号码直接不入池 |
+| 4 | 0–9 全覆盖 | 每个数字至少出现在 1 注里；补数字时优先牺牲"每个数字都有其它注兜底"的非组三低分注 |
+| 5 | 分散度上限 | 单个数字出现注数 ≤ 5。防止"7 注都含同一个数字"——该数字一旦不开，整张清单几乎全废 |
+
+**实现注意（踩过的坑）**：第 5 步每轮只能把超标数字降 1 注，因此替换品的合法性判定必须用
+`max(base[d], max_repeat)` 而不是死板的 `max_repeat`，否则第一轮就找不到任何合法替换品而直接退出，
+导致约束"看起来加了、实际没生效"。修改后必须用这条路验证：
+
+```bash
+python - <<'EOF'  # 打印每个数字出现注数，要求 MAX ≤ 5 且十个数字齐全
+```
+
+**输出前对两份清单逐项核对**：
+- 10 行齐全，无重复组合
+- 跨度全部落在 3–8，和值全部落在 6–23
+- 0–9 十个数字都有出现，且没有数字出现在 5 注以上
+- 金码、银码都在表内，且两者不是同一组数字的排列（数字集合交集 ≤ 1）
+
 ## Scope规则
 
 - 用户没提的彩种不分析
@@ -362,10 +389,20 @@ python run_analysis.py --games [彩种] --count 100
 scripts/
 ├── run_analysis.py        # 入口：数据获取+分析+格式化输出一体化
 ├── lottery_analysis.py    # 数据获取函数（fetch_3d, fetch_pl3, fetch_dlt）
-├── smart_selector.py      # 3D/排三智能选号系统V3.0（12维评分+8策略）
-├── smart_selector_v31.py  # V3.1备份（纯理论概率版本）
-└── dlt_analysis.py        # 大乐透专业分析系统V1（15维评分）
+├── smart_selector.py      # 3D/排三 V3（Dirichlet 后验 + 12维评分 + 8策略 + 质量底线）
+├── smart_selector_v4.py   # 3D/排三 V4（Markov1/2、联合分布、几何遗漏、ACF、Regime、Bootstrap）
+├── dlt_analysis.py        # 大乐透 V3（15维评分）
+├── dlt_analysis_v4.py     # 大乐透 V4（Copula共现 / PageRank / GA前区 / 后区独立选优）
+├── ensemble.py            # V3+V4 Borda 集成（默认档位）
+├── backtest.py            # 3D/排三滚动回测
+├── backtest_dlt.py        # 大乐透滚动回测
+└── run_backtest.py        # 回测入口
 ```
+
+> **版本统一说明（2026-10-15）**：本技能为唯一在用版本 **V5**。历史遗留的
+> `smart_selector_v30_backup.py`、`smart_selector_v31.py`、`backtest_v2.py`、`scoring_versions.md`
+> 已从仓库移除（git 历史仍可回溯），物理副本归档于
+> `~/.workbuddy/skill-backups/lottery-v5-legacy-20261015-2134/`。
 
 ## V3.0 更新说明（2026-09-25 重构）
 

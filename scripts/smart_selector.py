@@ -836,6 +836,7 @@ class SmartNumberSelector:
         2. 金码、银码占位，保证两者一定在清单内
         3. 不足10注时从候选池（沿用质量底线）按评分补足
         4. 数字覆盖校正：0-9每个数字至少出现1次
+        5. 分散度校正：单个数字在10注中出现次数不超过5（防止"7注都含同一个数字"这类隐性集中）
         """
         def combo_key(nums):
             return tuple(sorted(nums))
@@ -941,6 +942,72 @@ class SmartNumberSelector:
                 break
             victim = items.pop(victim_idx)
             used.discard(combo_key((victim['b'], victim['s'], victim['g'])))
+            items.append(make_item(replacement))
+            used.add(combo_key(replacement))
+
+        # 5) 分散度校正：单个数字在10注中的出现注数不超过 max_repeat
+        #    防止"7注都含8"这类隐性集中——该数字一旦不开，整张清单大概率全废
+        max_repeat = 5
+        for _ in range(30):
+            note_cnt = Counter()
+            for it in items:
+                for d in set((it['b'], it['s'], it['g'])):
+                    note_cnt[d] += 1
+            over = [d for d in range(10) if note_cnt[d] > max_repeat]
+            if not over:
+                break
+            hot = max(over, key=lambda d: note_cnt[d])
+            items.sort(key=lambda x: x['score'])  # 升序：优先牺牲评分最低的一注
+
+            def _key_of(it):
+                return combo_key((it['b'], it['s'], it['g']))
+
+            def _removable(it):
+                ds = set((it['b'], it['s'], it['g']))
+                # 必须是含 hot 的非金/银码注，且移除后不破坏 0-9 全覆盖
+                if hot not in ds:
+                    return False
+                if _key_of(it) in (gold_key, silver_key):
+                    return False
+                return all(note_cnt[d] - 1 >= 1 for d in ds)
+
+            victim_idx = None
+            for predicate in (
+                lambda it: _removable(it) and it.get('shape') != 'zusan',
+                lambda it: _removable(it),
+            ):
+                victim_idx = next((i for i, it in enumerate(items) if predicate(it)), None)
+                if victim_idx is not None:
+                    break
+            if victim_idx is None:
+                break
+
+            victim = items[victim_idx]
+            victim_key = _key_of(victim)
+            base = Counter(note_cnt)
+            for d in set((victim['b'], victim['s'], victim['g'])):
+                base[d] -= 1
+
+            def _replaceable(nums):
+                trial = Counter(base)
+                for d in set(nums):
+                    trial[d] += 1
+                # 不能让任何数字归零；已被"稀释"到允许多少，就允许保持在该水平，
+                # 否则一次只能降 1 注的情况下永远找不到合法替换品（拒绝 torpid 抖动）
+                for d in range(10):
+                    if trial[d] < 1:
+                        return False
+                    if trial[d] > max(base[d], max_repeat):
+                        return False
+                return True
+
+            replacement = next(((b, s, g) for sc, b, s, g in pool
+                                if combo_key((b, s, g)) not in used
+                                and _replaceable((b, s, g))), None)
+            if replacement is None:
+                break
+            items.pop(victim_idx)
+            used.discard(victim_key)
             items.append(make_item(replacement))
             used.add(combo_key(replacement))
 

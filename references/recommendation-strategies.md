@@ -1,5 +1,9 @@
 # Number Recommendation Strategies (金码推荐策略)
 
+> **版本归属（2026-10-15 统一）**：本文档描述的是 **V5 中 V3 档位**的候选策略，
+> 实现位于 `scripts/smart_selector.py`（3D/排三）与 `scripts/dlt_analysis.py`（大乐透）。
+> 标题中的 v2.4.1 / v3 为历史版本编号，仅作沿革记录，不代表当前独立版本。
+
 > **v2.4.1更新 (2026-09-16)**: 推荐系统已整合到 `smart_selector.py`（3D/排三）和 `dlt_analysis.py`（大乐透）。
 
 **IMPORTANT: All recommendations must be complete 3-digit bets (整注).**
